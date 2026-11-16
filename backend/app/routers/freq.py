@@ -30,13 +30,29 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出频率控制清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "freq", "total": total, "items": items}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
-    """读取单条频率规则明细；不存在时给出可读的错误说明。"""
+    """读取单条频率规则明细；窗口参数、占用记录与拒绝依据出自同一份占用版本。"""
     entry = service.get_entry(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"频率规则 {entry_id} 不存在或已归档")
     return entry
+
+
+@router.get("/{entry_id}/windows")
+def get_windows(entry_id: int) -> dict:
+    """规则页读取的频率预算数据集：窗口参数、占用记录与拒绝依据同一份结果。"""
+    payload = service.budget_windows(entry_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"频率规则 {entry_id} 不存在或已归档")
+    return payload
 
 
 @router.post("", response_model=ActionResult)
@@ -50,16 +66,10 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条频率规则执行提交校验、启用规则、停用规则；不允许的动作会被拦下并说明原因。"""
-    action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    """对单条频率规则执行校验、启用、停用、换版与更正；不允许的动作会被拦下并说明原因。"""
+    values = payload.merged_values()
+    action = str(values.get("action") or "").strip()
+    entry, message = service.run_action(entry_id, action, values)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出频率控制清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "freq", "total": total, "items": items}

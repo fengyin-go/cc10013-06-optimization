@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
+# 频率预算数据集：频率规则的下属窗口占用记录。规则页与采集监控待处理清单共读这一份。
+FREQ_WINDOW_ROWS: list[dict[str, Any]] = []
+
 SEED_ROWS: dict[str, list[dict[str, Any]]] = {
     "endpoint": [{'id': 1,
   'status': '草稿',
@@ -111,7 +114,20 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '冷却秒数': '频率控制样例3',
   '队列长度': '频率控制样例3',
   '优先级': '频率控制样例3',
-  '并发窗口': '频率控制样例3'}],
+  '并发窗口': '频率控制样例3'},
+ {'id': 4,
+  'status': '草稿',
+  'pending': True,
+  'abnormal': False,
+  '规则版本': 1,
+  '规则编号': 'FREQ-31',
+  '目标端点': '/api/orders/sync',
+  '每秒上限': '18',
+  '突发容量': '6',
+  '冷却秒数': '30',
+  '队列长度': '64',
+  '优先级': '高',
+  '并发窗口': '单窗口'}],
     "mapper": [{'id': 1,
   'status': '草稿',
   'pending': True,
@@ -651,5 +667,6 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '传输协议': '数据导出样例3',
   '频率限制': '数据导出样例3',
   '加密开关': '数据导出样例3',
-  '完整性校验': '数据导出样例3'}]
+  '完整性校验': '数据导出样例3'}],
+    "freq_window": FREQ_WINDOW_ROWS,
 }

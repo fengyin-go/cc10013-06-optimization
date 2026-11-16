@@ -25,7 +25,16 @@ class EntryPayload(BaseModel):
     """登记或修改一条业务记录时提交的字段集合。"""
 
     values: dict[str, Any] = Field(default_factory=dict)
+    # 也接受把 action 放在顶层：{ "action": "启用规则" } 与 { "values": { "action": ... } } 等价。
+    action: str | None = None
     remark: str | None = None
+
+    def merged_values(self) -> dict[str, Any]:
+        values = dict(self.values)
+        if self.action and not values.get("action"):
+            values["action"] = self.action
+        return values
+
 
 
 

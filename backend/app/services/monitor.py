@@ -1,8 +1,13 @@
-"""采集监控业务规则：状态流转、字段校验与筛选口径都收在这里。"""
+"""采集监控业务规则：状态流转、字段校验与筛选口径都收在这里。
+
+频率预算数据集里的异常窗口会以“待处理”条目并入监控清单，规则页与监控页读到的是
+同一个占用版本。
+"""
 from __future__ import annotations
 
 from typing import Any
 
+from app.services.freq_budget import FreqBudgetService
 from app.store import store
 
 MODULE = "monitor"
@@ -13,6 +18,9 @@ NEGATIVE_ACTIONS = ["停用监控"]
 
 
 class MonitorService:
+    def __init__(self) -> None:
+        self.budget = FreqBudgetService()
+
     def list_entries(
         self,
         *,
@@ -20,10 +28,16 @@ class MonitorService:
         status: str | None = None,
         page: int = 1,
         size: int = 20,
+        include_windows: bool = True,
     ) -> tuple[list[dict[str, Any]], int]:
-        rows = store.rows(MODULE)
+        rows = list(store.rows(MODULE))
+        if include_windows:
+            rows.extend(self.budget.pending_windows())
         if keyword:
-            rows = [row for row in rows if keyword in str(row.get("指标编号", ""))]
+            rows = [
+                row for row in rows
+                if keyword in str(row.get("指标编号", "")) or keyword in str(row.get("窗口编号", ""))
+            ]
         if status:
             rows = [row for row in rows if row.get("status") == status]
         total = len(rows)
@@ -32,6 +46,10 @@ class MonitorService:
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
         return store.find(MODULE, entry_id)
+
+    def pending_windows(self) -> list[dict[str, Any]]:
+        """频率监控待处理清单：接收窗口结果，同一占用版本供规则页读取。"""
+        return self.budget.pending_windows()
 
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]
@@ -46,7 +64,9 @@ class MonitorService:
         rows.append(entry)
         return entry, []
 
-    def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
+    def run_action(
+        self, entry_id: int, action: str, values: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any] | None, str]:
         entry = store.find(MODULE, entry_id)
         if entry is None:
             return None, f"监控指标 {entry_id} 不存在或已归档"

@@ -3,16 +3,33 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.freq_budget import (
+    ACTIVE_STATUS,
+    CORRECTION_ACTIONS,
+    PARAM_FIELDS,
+    REVISE_ACTIONS,
+    FreqBudgetService,
+)
 from app.store import store
 
 MODULE = "freq"
 REQUIRED_FIELDS = ["规则编号", "目标端点", "每秒上限"]
 STATUS_ORDER = ["草稿", "待校验", "已启用", "已停用"]
-ACTION_RULES = {"提交校验": "待校验", "启用规则": "已启用", "停用规则": "已停用"}
+ACTION_RULES = {
+    "提交校验": "待校验",
+    "启用规则": "已启用",
+    "停用规则": "已停用",
+    "修订规则": "已启用",
+    "规则换版": "已启用",
+    "迟到更正": "已启用",
+}
 NEGATIVE_ACTIONS = ["停用规则"]
 
 
 class FreqService:
+    def __init__(self) -> None:
+        self.budget = FreqBudgetService()
+
     def list_entries(
         self,
         *,
@@ -28,10 +45,13 @@ class FreqService:
             rows = [row for row in rows if row.get("status") == status]
         total = len(rows)
         start = max(page - 1, 0) * size
-        return rows[start:start + size], total
+        return [self.budget.enrich(row) for row in rows[start:start + size]], total
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
-        return store.find(MODULE, entry_id)
+        entry = store.find(MODULE, entry_id)
+        if entry is None:
+            return None
+        return self.budget.enrich(entry, detail=True)
 
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]
@@ -40,13 +60,19 @@ class FreqService:
         rows = store.rows(MODULE)
         entry = {"id": max((int(row.get("id", 0)) for row in rows), default=0) + 1}
         entry.update({field: values.get(field) for field in REQUIRED_FIELDS})
+        for field in PARAM_FIELDS:
+            if field in values:
+                entry[field] = values.get(field)
+        entry["规则版本"] = 1
         entry["status"] = STATUS_ORDER[0]
         entry["pending"] = True
         entry["abnormal"] = False
         rows.append(entry)
-        return entry, []
+        return self.budget.enrich(entry, detail=True), []
 
-    def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
+    def run_action(
+        self, entry_id: int, action: str, values: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any] | None, str]:
         entry = store.find(MODULE, entry_id)
         if entry is None:
             return None, f"频率规则 {entry_id} 不存在或已归档"
@@ -55,7 +81,39 @@ class FreqService:
         target = ACTION_RULES[action]
         if target not in STATUS_ORDER:
             return None, f"目标状态「{target}」不在允许的状态序列里"
-        entry["status"] = target
-        entry["pending"] = target != STATUS_ORDER[-1]
-        entry["abnormal"] = action in NEGATIVE_ACTIONS
-        return entry, f"频率规则已{action}"
+        values = values or {}
+
+        if action == "启用规则":
+            entry, message = self.budget.enable(entry, values)
+        elif action == "停用规则":
+            entry, message = self.budget.close(entry, values)
+        elif action in REVISE_ACTIONS:
+            entry, message = self.budget.revise(entry, values)
+        elif action in CORRECTION_ACTIONS:
+            entry, message = self.budget.apply_correction(entry, values)
+        else:
+            entry["status"] = target
+            entry["pending"] = target != STATUS_ORDER[-1]
+            entry["abnormal"] = action in NEGATIVE_ACTIONS
+            message = f"频率规则已{action}"
+
+        return self.budget.enrich(entry, detail=True), message
+
+    def budget_windows(self, entry_id: int) -> dict[str, Any] | None:
+        """规则页读取的占用版本：窗口参数、占用记录与拒绝依据同一份结果。"""
+        entry = store.find(MODULE, entry_id)
+        if entry is None:
+            return None
+        detail = self.budget.enrich(entry, detail=True)
+        active = self.budget.active_window(entry_id)
+        return {
+            "规则编号": entry.get("规则编号"),
+            "规则版本": entry.get("规则版本", 1),
+            "占用版本": detail.get("占用版本", 0),
+            "窗口状态": ACTIVE_STATUS if active is not None else detail.get("窗口状态", ""),
+            "窗口参数": detail.get("窗口参数", {}),
+            "占用记录": detail.get("占用记录"),
+            "窗口": detail.get("窗口", []),
+            "拒绝依据": detail.get("拒绝依据", {}),
+            "判定": detail.get("判定", ""),
+        }
